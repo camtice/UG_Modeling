@@ -1,48 +1,121 @@
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
 
-def fehr_schmidt_utility(own_amount, other_amount, alpha, beta):
-    """
-    Calculate utility based on Fehr-Schmidt inequality aversion model
-    
-    Parameters:
-    own_amount: monetary payoff for self
-    other_amount: monetary payoff for other
-    alpha: envy parameter (sensitivity to receiving less than other)
-    beta: guilt parameter (sensitivity to receiving more than other)
-    """
-    envy = max(other_amount - own_amount, 0)
-    guilt = max(own_amount - other_amount, 0)
-    
-    utility = own_amount - (alpha * envy) - (beta * guilt)
-    return utility
+class UtilityModel:
+    """Base class for utility models"""
+    def __init__(self, alpha, beta, temperature):
+        self.alpha = alpha
+        self.beta = beta
+        self.temperature = temperature
 
-def rabin_utility(own_amount, other_amount, max_possible, min_possible):
-    """
-    Calculate utility based on Rabin's fairness model
+    def calculate_utility(self, own_amount, other_amount):
+        raise NotImplementedError("Subclasses must implement calculate_utility")
     
+    def calculate_trial_utility(self, row):
+        raise NotImplementedError("Subclasses must implement calculate_trial_utility")
+
+
+class FehrSchmidtModel(UtilityModel):
+    def calculate_utility(self, own_amount, other_amount):
+        envy = max(other_amount - own_amount, 0)
+        guilt = max(own_amount - other_amount, 0)
+        return own_amount - (self.alpha * envy) - (self.beta * guilt)
+    
+    def calculate_trial_utility(self, row):
+        utility = self.calculate_utility(row['split_self'], row['split_opp'])
+        return {
+            'utility': utility,
+            'comparison_offer': row['split_self'],
+            'additional_metrics': {}
+        }
+
+
+class BayesianFehrSchmidtModel(UtilityModel):
+    def __init__(self, alpha, beta, temperature, initial_k=1, initial_v=1, initial_sigma2=0.04):
+        super().__init__(alpha, beta, temperature)
+        self.mu_hat = 0.5  # Initial expected proportion
+        self.k = initial_k
+        self.v = initial_v
+        self.sigma2_hat = initial_sigma2
+
+    def calculate_utility(self, own_amount, expected_offer):
+        envy = max(expected_offer - own_amount, 0)
+        guilt = max(own_amount - expected_offer, 0)
+        return own_amount - (self.alpha * envy) - (self.beta * guilt)
+    
+    def calculate_trial_utility(self, row):
+        total_pot = row['combined_earning']
+        current_mu = self.mu_hat  # Store current mu_hat before update
+        expected_offer = current_mu * total_pot
+        
+        utility = self.calculate_utility(row['split_self'], expected_offer)
+        
+        # Calculate observed proportion
+        observed_proportion = row['split_self'] / total_pot
+        
+        # Store previous values for debugging
+        prev_k = self.k
+        prev_v = self.v
+        prev_sigma2 = self.sigma2_hat
+        
+        # Perform Bayesian update
+        self.mu_hat, self.k, self.v, self.sigma2_hat = bayesian_update(
+            observed_proportion,
+            current_mu,
+            prev_k,
+            prev_v,
+            prev_sigma2
+        )
+        
+        return {
+            'utility': utility,
+            'comparison_offer': expected_offer,
+            'additional_metrics': {
+                'Expected Proportion': round(current_mu, 2),  # Use current_mu (before update)
+                'Variance': round(self.sigma2_hat, 4),
+                'Observed Proportion': round(observed_proportion, 2),
+                'Prior mu': round(current_mu, 2),  # Use same current_mu
+                'Prior k': round(prev_k, 2),
+                'Prior v': round(prev_v, 2),
+                'Prior sigma2': round(prev_sigma2, 4),
+                'Delta mu': round(self.mu_hat - current_mu, 4),
+                'Update Weight': round(1/self.k, 4),
+                'Expected Offer': round(expected_offer, 2),
+                'Total Pot': total_pot
+            }
+        }
+
+
+def bayesian_update(x_t_proportion, mu_hat_prev, k_prev, v_prev, sigma2_hat_prev):
+    """
+    Perform Bayesian update for the mean and variance of the offer proportions.
+
     Parameters:
-    own_amount: monetary payoff for self (πi)
-    other_amount: monetary payoff for other (πj)
-    max_possible: maximum possible payoff in the game
-    min_possible: minimum possible payoff in the game
+    x_t_proportion: observed offer proportion at trial t (e.g., 0.5 for a 50-50 split)
+    mu_hat_prev: previous estimated mean proportion μ̂_{t-1}
+    k_prev: previous k_{t-1}
+    v_prev: previous v_{t-1}
+    sigma2_hat_prev: previous estimated variance σ̂_{t-1}^2
+
+    Returns:
+    mu_hat_t: updated estimated mean proportion μ̂_t
+    k_t: updated k_t
+    v_t: updated v_t
+    sigma2_hat_t: updated estimated variance σ̂_t^2
     """
-    # Calculate fair payoff (average of max and min)
-    fair_payoff = (max_possible + min_possible) / 2
+    k_t = k_prev + 1
+    v_t = v_prev + 1
     
-    # Calculate kindness of player i toward j
-    # fi = (πj - πj_fair) / (πj_max - πj_min)
-    kindness_to_other = (other_amount - fair_payoff) / (max_possible - min_possible)
+    # Update mean estimate (weighted average of previous estimate and new observation)
+    mu_hat_t = (k_prev / k_t) * mu_hat_prev + (1 / k_t) * x_t_proportion
     
-    # Calculate perceived kindness from j to i
-    # f̃j = (πi - πi_fair) / (πi_max - πi_min)
-    perceived_kindness = (own_amount - fair_payoff) / (max_possible - min_possible)
+    # Update variance estimate
+    variance_update = v_prev * sigma2_hat_prev + (k_prev / k_t) * (x_t_proportion - mu_hat_prev) ** 2
+    sigma2_hat_t = variance_update / v_t
     
-    # Calculate total utility
-    # Ui = πi + f̃j + f̃j * fi
-    utility = own_amount + perceived_kindness + (perceived_kindness * kindness_to_other)
-    
-    return utility
+    return mu_hat_t, k_t, v_t, sigma2_hat_t
 
 def simulate_responder_decision(utility, temperature):
     """
@@ -63,132 +136,205 @@ def simulate_responder_decision(utility, temperature):
     
     return decision, acceptance_prob
 
-def analyze_individual_decisions(participant_id, model_params, data, utility_model, role='responder'):
-    """
-    Analyze decisions for a specific participant and compare with model predictions
-    
-    Parameters:
-    participant_id: participant ID number
-    model_params: dictionary of model parameters
-    data: pandas DataFrame containing decision data
-    utility_model: function to calculate utility
-    role: 'responder' or 'proposer' (default='responder')
-    """
+def analyze_individual_decisions(participant_id, utility_model, data, role='responder'):
+    """Analyze decisions for a specific participant and compare with model predictions"""
     # Filter for participant and role
     individual_data = data[data['ID'] == participant_id].copy()
-    if role == 'responder':
-        individual_data = individual_data[individual_data['trial_role'] == 1]
-    elif role == 'proposer':
-        individual_data = individual_data[individual_data['trial_role'] == 2]
-    
-    temperature = model_params.pop('temperature', 0.001)  # Extract temperature parameter
+    individual_data = individual_data[individual_data['trial_role'] == (1 if role == 'responder' else 2)]
     
     results = []
     for _, row in individual_data.iterrows():
-        # Calculate utility
-        if utility_model == rabin_utility:
-            utility = utility_model(
-                row['split_self'],
-                row['split_opp'],
-                row['combined_earning'],  # max possible
-                0  # min possible
-            )
-        else:
-            utility = utility_model(
-                row['split_self'],
-                row['split_opp'],
-                **model_params
-            )
+        # Calculate utility using model-specific logic
+        trial_result = utility_model.calculate_trial_utility(row)
+        utility = trial_result['utility']
+        comparison_offer = trial_result['comparison_offer']
         
         # Simulate decision
-        decision, acceptance_prob = simulate_responder_decision(utility, temperature)
+        decision, acceptance_prob = simulate_responder_decision(utility, utility_model.temperature)
         
-        results.append({
+        # Build result dictionary
+        result_dict = {
             'Trial': row['trial_number'],
             'Trial Type': row['trial_type'],
             'Total Pot': row['combined_earning'],
-            'Tokens Found (Self)': row['token_self'],
-            'Tokens Found (Other)': row['token_opp'],
-            'Opponent Offer': row['split_opp'],
+            'Tokens Self': row['token_self'],
+            'Tokens Other': row['token_opp'],
             'Individual Offer': row['split_self'],
-            'Offer Proportion': row['splitperc_self'] / 100,
-            'Actual Decision': 'Accept' if row['accept'] == 1 else 'Reject',
-            'Model Decision': 'Accept' if decision else 'Reject',
+            'Opponent Offer': row['split_opp'],
+            'Comparison Offer': round(comparison_offer, 2),
+            'Actual D': 'Accept' if row['accept'] == 1 else 'Reject',
+            'Model D': 'Accept' if decision else 'Reject',
             'Utility': round(utility, 2),
             'Accept Probability': round(acceptance_prob, 2)
-        })
+        }
+        
+        # Add any additional model-specific metrics
+        result_dict.update(trial_result['additional_metrics'])
+        results.append(result_dict)
     
     return pd.DataFrame(results)
 
-def display_analysis_results(results, participant_id, alpha, beta):
+def display_analysis_results(results, participant_id, model_name, model_params=None):
+    print(f"\nAnalysis for Participant {participant_id}")
+    if model_params:
+        param_str = ", ".join([f"{k}={v}" for k, v in model_params.items()])
+        print(f"Model: {model_name} ({param_str})")
+    else:
+        print(f"Model: {model_name}")
+    
+    print("\nDecisions by trial:\n")
+    
+    # Format the display columns
+    display_cols = [
+        'Trial', 'Trial Type', 'Total Pot', 
+        'Individual Offer', 'Opponent Offer', 'Comparison Offer',
+        'Actual D', 'Model D', 'Utility', 'Accept Probability',
+        # Add Bayesian debugging metrics
+        'Expected Proportion', 'Observed Proportion',
+        'Prior mu', 'Delta mu', 'Update Weight',
+        'Prior sigma2', 'Prior k', 'Prior v'
+    ]
+    
+    # Only include columns that exist in the results
+    display_cols = [col for col in display_cols if col in results.columns]
+    
+    print(results[display_cols].to_string(index=False))
+    
+    # ... rest of the display function ...
+
+def plot_utility_curves(total_pot=20, models=None):
     """
-    Display formatted analysis results for a participant
+    Plot utility curves for different models as the split changes
     
     Parameters:
-    results: DataFrame containing analysis results
-    participant_id: ID of the participant being analyzed
-    alpha: envy parameter used in the analysis
-    beta: guilt parameter used in the analysis
+    total_pot: total amount to be split (default=20)
+    models: dictionary of models to plot, if None uses default parameters
+    Example models dictionary:
+    {
+        'Fehr-Schmidt (α=0.9)': {
+            'func': fehr_schmidt_utility,
+            'params': {'alpha': 0.9, 'beta': 0.25},
+            'param_display': 'α=0.9, β=0.25'  # Optional: custom parameter display
+        },
+        'Custom Model': {
+            'func': custom_utility_function,
+            'params': {'param1': value1, 'param2': value2},
+            'param_display': 'custom display string'  # Optional
+        }
+    }
     """
-    print(f"\nAnalysis for Participant {participant_id} (α={alpha}, β={beta}):\n")
-    print("Decisions by trial:\n")
+    if models is None:
+        # Define different values of alpha for Fehr-Schmidt
+        alpha_values = [0.1, 0.5, 0.9, 1.5, 2.0]
+        models = {
+            f'Fehr-Schmidt (α={alpha})': {
+                'func': fehr_schmidt_utility,
+                'params': {'alpha': alpha, 'beta': 0.25},
+                'param_display': f'α={alpha}, β=0.25'
+            } for alpha in alpha_values
+        }
     
-    # Set display options for cleaner output
-    pd.set_option('display.max_rows', None)
-    pd.set_option('display.float_format', lambda x: '{:.2f}'.format(x))
+    # Create range of splits to evaluate
+    splits = np.linspace(0, total_pot, 100)
     
-    # Create a cleaner display table
-    display_results = results.sort_values('Trial')[
-        ['Trial Type', 'Tokens Found (Self)', 'Tokens Found (Other)',
-         'Individual Offer', 'Opponent Offer', 
-         'Actual Decision', 'Model Decision', 
-         'Utility', 'Accept Probability']
-    ].rename(columns={
-        'Accept Probability': 'P(Accept)'
-    })
+    # Set up the plot
+    plt.figure(figsize=(10, 6))
+    sns.set_style("whitegrid")
     
-    # Center-align the decision columns
-    for col in ['Actual Decision', 'Model Decision']:
-        display_results[col] = display_results[col].str.center(10)
+    # Plot each model
+    for model_name, model_info in models.items():
+        utilities = []
+        for own_amount in splits:
+            other_amount = total_pot - own_amount
+            utility = model_info['func'](
+                own_amount=own_amount,
+                other_amount=other_amount,
+                **model_info['params']
+            )
+            utilities.append(utility)
+        
+        plt.plot(splits/total_pot, utilities, label=model_name, linewidth=2)
     
-    # Print the results with additional spacing
-    print(display_results.to_string(index=False, col_space=12, justify='right'))
-    print("\n" + "-" * 60 + "\n")
+    # Add reference lines
+    plt.axvline(x=0.5, color='gray', linestyle='--', alpha=0.5, label='Equal Split')
+    plt.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
     
-    # Calculate and display statistics
-    print("Summary Statistics:\n")
-    agreement = (results['Actual Decision'] == results['Model Decision']).mean()
-    actual_acceptance_rate = (results['Actual Decision'] == 'Accept').mean()
-    model_acceptance_rate = (results['Model Decision'] == 'Accept').mean()
+    # Customize plot
+    plt.xlabel('Proportion of Pot to Self')
+    plt.ylabel('Utility')
+    plt.title(f'Utility by Split of {total_pot} Tokens')
+    plt.legend()
     
-    print(f"Model agreement with actual decisions: {agreement:.1%}\n")
-    print(f"Actual acceptance rate: {actual_acceptance_rate:.1%}\n")
-    print(f"Model acceptance rate: {model_acceptance_rate:.1%}\n")
+    # Add annotations for parameters
+    param_text = []
+    for model_name, model_info in models.items():
+        if 'param_display' in model_info:
+            param_text.append(f"{model_name}: {model_info['param_display']}")
+    
+    if param_text:
+        plt.figtext(0.02, 0.02, '\n'.join(param_text), fontsize=8)
+    
+    plt.tight_layout()
+    plt.show()
 
 # Load data
 data = pd.read_csv('cam_made_up_responses.csv')
 
 if __name__ == "__main__":
     # Parameters you can adjust
-    participant_id = 1001  # Updated to match new dataset
+    participant_id = 1001
     
-    # Choose your model and its parameters
-    model_params = {
-        'alpha': 0.9,  # Envy parameter
-        'beta': 0.25   # Guilt parameter
+    # Define all available models and their parameters
+    models = {
+        'fehr_schmidt': {
+            'utility_function': FehrSchmidtModel(0.9, 0.25, 0.001),
+            'params': {
+                'alpha': 0.9,    # Envy parameter
+                'beta': 0.25,    # Guilt parameter
+                'temperature': 0.001
+            },
+            'display_params': ['alpha', 'beta']
+        },
+        'fehr_schmidt_bayesian': {
+            'utility_function': BayesianFehrSchmidtModel(0.9, 0.25, 0.001),
+            'params': {
+                'alpha': 0.9,           # Envy parameter
+                'beta': 0.25,          # Guilt parameter
+                'temperature': 0.001,   # Decision temperature
+                'initial_k': 1,         # Initial k
+                'initial_v': 1,         # Initial v
+                'initial_sigma2': 25    # Initial variance
+            },
+            'display_params': ['alpha', 'beta']
+        }
     }
     
-    # Select utility model (currently only Fehr-Schmidt implemented)
-    utility_model = rabin_utility
-    
-    # Analyze decisions
-    results = analyze_individual_decisions(
-        participant_id, 
-        model_params, 
-        data, 
-        utility_model,
-        role='responder'  # Specify role
-    )
-    
-    # Display results
-    display_analysis_results(results, participant_id, model_params['alpha'], model_params['beta'])
+    # Run analysis for both models
+    for model_name, model_config in models.items():
+        utility_model = model_config['utility_function']
+        model_params = model_config['params']
+        
+        # Prepare display parameters
+        display_params = {
+            param: model_params[param]
+            for param in model_config['display_params']
+        }
+        
+        # Analyze decisions
+        results = analyze_individual_decisions(
+            participant_id, 
+            utility_model, 
+            data, 
+            role='responder'
+        )
+        
+        # Display results
+        display_analysis_results(
+            results, 
+            participant_id, 
+            model_name, 
+            display_params if display_params else None
+        )
+        
+        # Optional: add a separator between models
+        print("\n" + "="*80 + "\n")
