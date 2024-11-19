@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib.animation as animation
 
 class UtilityModel:
     """Base class for utility models"""
@@ -186,7 +187,7 @@ def display_analysis_results(results, participant_id, model_name, model_params=N
     
     # Format the display columns
     display_cols = [
-        'Trial', 'Trial Type', 'Total Pot', 
+        'Trial', 'Total Pot', 
         'Individual Offer', 'Opponent Offer', 'Comparison Offer',
         'Actual D', 'Model D', 'Utility', 'Accept Probability',
         # Add Bayesian debugging metrics
@@ -203,57 +204,55 @@ def display_analysis_results(results, participant_id, model_name, model_params=N
     # ... rest of the display function ...
 
 def plot_utility_curves(total_pot=20, models=None):
-    """
-    Plot utility curves for different models as the split changes
-    
-    Parameters:
-    total_pot: total amount to be split (default=20)
-    models: dictionary of models to plot, if None uses default parameters
-    Example models dictionary:
-    {
-        'Fehr-Schmidt (α=0.9)': {
-            'func': fehr_schmidt_utility,
-            'params': {'alpha': 0.9, 'beta': 0.25},
-            'param_display': 'α=0.9, β=0.25'  # Optional: custom parameter display
-        },
-        'Custom Model': {
-            'func': custom_utility_function,
-            'params': {'param1': value1, 'param2': value2},
-            'param_display': 'custom display string'  # Optional
-        }
-    }
-    """
+    """Plot utility curves comparing Fehr-Schmidt and Bayesian Fehr-Schmidt models"""
     if models is None:
-        # Define different values of alpha for Fehr-Schmidt
-        alpha_values = [0.1, 0.5, 0.9, 1.5, 2.0]
+        # Create both regular and Bayesian models
+        alpha = 2
+        beta = 0.25
         models = {
-            f'Fehr-Schmidt (α={alpha})': {
-                'func': fehr_schmidt_utility,
-                'params': {'alpha': alpha, 'beta': 0.25},
-                'param_display': f'α={alpha}, β=0.25'
-            } for alpha in alpha_values
+            'Fehr-Schmidt': {
+                'model': FehrSchmidtModel(alpha=alpha, beta=beta, temperature=0.001),
+                'param_display': f'α={alpha}, β={beta}'
+            },
+            'Bayesian Fehr-Schmidt': {
+                'model': BayesianFehrSchmidtModel(alpha=alpha, beta=beta, temperature=0.001),
+                'param_display': f'α={alpha}, β={beta}, μ₀=0.5'
+            }
         }
     
     # Create range of splits to evaluate
     splits = np.linspace(0, total_pot, 100)
     
     # Set up the plot
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(12, 7))
     sns.set_style("whitegrid")
     
-    # Plot each model
-    for model_name, model_info in models.items():
+    # Plot regular Fehr-Schmidt model
+    utilities = []
+    for own_amount in splits:
+        other_amount = total_pot - own_amount
+        utility = models['Fehr-Schmidt']['model'].calculate_utility(own_amount, other_amount)
+        utilities.append(utility)
+    plt.plot(splits/total_pot, utilities, label='Fehr-Schmidt', linewidth=2, color='black')
+    
+    # Plot Bayesian model with different expected proportions
+    expected_proportions = [0.5, 0.4, 0.3, 0.2]
+    colors = ['red', 'orange', 'green', 'blue']
+    
+    for exp_prop, color in zip(expected_proportions, colors):
         utilities = []
+        models['Bayesian Fehr-Schmidt']['model'].mu_hat = exp_prop
         for own_amount in splits:
-            other_amount = total_pot - own_amount
-            utility = model_info['func'](
-                own_amount=own_amount,
-                other_amount=other_amount,
-                **model_info['params']
-            )
+            utility = models['Bayesian Fehr-Schmidt']['model'].calculate_utility(
+                own_amount, exp_prop * total_pot)
             utilities.append(utility)
+        plt.plot(splits/total_pot, utilities, 
+                label=f'Bayesian FS (exp={exp_prop})', 
+                linewidth=2, 
+                color=color)
         
-        plt.plot(splits/total_pot, utilities, label=model_name, linewidth=2)
+        # Add vertical line for each expected proportion
+        plt.axvline(x=exp_prop, color=color, linestyle=':', alpha=0.5)
     
     # Add reference lines
     plt.axvline(x=0.5, color='gray', linestyle='--', alpha=0.5, label='Equal Split')
@@ -262,8 +261,8 @@ def plot_utility_curves(total_pot=20, models=None):
     # Customize plot
     plt.xlabel('Proportion of Pot to Self')
     plt.ylabel('Utility')
-    plt.title(f'Utility by Split of {total_pot} Tokens')
-    plt.legend()
+    plt.title('Utility Curves: Fehr-Schmidt vs Bayesian Fehr-Schmidt\nDotted lines show expected proportions')
+    plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     
     # Add annotations for parameters
     param_text = []
@@ -277,13 +276,86 @@ def plot_utility_curves(total_pot=20, models=None):
     plt.tight_layout()
     plt.show()
 
+def create_utility_animation(total_pot=20, frames=50):
+    """Create an animated plot showing utility curves changing with expectations"""
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    # Create range of splits to evaluate
+    splits = np.linspace(0, total_pot, 100)
+    
+    # Define different alpha (envy) values
+    alphas = [0.5, 1.0, 2.0]
+    colors = ['blue', 'green', 'red']
+    
+    def animate(frame):
+        ax.clear()
+        sns.set_style("whitegrid")
+        
+        # Calculate expected proportion (oscillating between 0.2 and 0.5)
+        t = frame / frames
+        expected_prop = 0.35 + 0.15 * np.sin(2 * np.pi * t)
+        
+        # Plot for each alpha value
+        for alpha, color in zip(alphas, colors):
+            # Create models
+            bayes_model = BayesianFehrSchmidtModel(
+                alpha=alpha, 
+                beta=0.25, 
+                temperature=0.001
+            )
+            bayes_model.mu_hat = expected_prop
+            
+            # Calculate utilities
+            utilities = []
+            for own_amount in splits:
+                utility = bayes_model.calculate_utility(
+                    own_amount, 
+                    expected_prop * total_pot
+                )
+                utilities.append(utility)
+            
+            ax.plot(splits/total_pot, utilities, 
+                   label=f'α={alpha}', 
+                   linewidth=2, 
+                   color=color)
+        
+        # Add reference lines
+        ax.axvline(x=0.5, color='gray', linestyle='--', alpha=0.5, label='Equal Split')
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax.axvline(x=expected_prop, color='black', linestyle=':', alpha=0.5,
+                  label=f'Expected Prop: {expected_prop:.2f}')
+        
+        # Customize plot
+        ax.set_xlabel('Proportion of Pot to Self')
+        ax.set_ylabel('Utility')
+        ax.set_title(f'Bayesian Fehr-Schmidt Utility Curves\nExpected Proportion = {expected_prop:.2f}')
+        ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax.set_ylim(-15, 20)  # Adjust these values based on your utility ranges
+        
+    # Create animation
+    anim = animation.FuncAnimation(
+        fig, 
+        animate, 
+        frames=frames,
+        interval=100,  # 100ms between frames
+        repeat=True
+    )
+    
+    # Save animation
+    anim.save('utility_animation.gif', writer='pillow')
+    plt.close()
+
 # Load data
-data = pd.read_csv('cam_made_up_responses.csv')
+data = pd.read_csv('data/ground/cam_made_up_responses.csv')
 
 if __name__ == "__main__":
     # Parameters you can adjust
     participant_id = 1001
-    
+
+    # plot_utility_curves(total_pot=20)
+    create_utility_animation(total_pot=20)
+
     # Define all available models and their parameters
     models = {
         'fehr_schmidt': {
@@ -338,3 +410,5 @@ if __name__ == "__main__":
         
         # Optional: add a separator between models
         print("\n" + "="*80 + "\n")
+
+    # create_utility_animation(total_pot=20)

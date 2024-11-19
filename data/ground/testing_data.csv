@@ -1,0 +1,16 @@
+ID,group,trial_number,trial_type,trial_role,token_opp,token_self,combined_earning,split_opp,split_self,splitperc_opp,splitperc_self,accept,accepted_amount,accepted_perc,proposed_perc,proposed_amount
+1001,Control,1,1,1,2,2,15,13.5,1.5,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,12,10.8,1.2,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,9,8.1,0.9,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,15,12,3,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,12,9.6,2.4,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,9,7.2,1.8,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,15,9,6,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,12,7.2,4.8,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,9,5.4,3.6,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,15,7.5,7.5,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,12,6,6,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,9,4.5,4.5,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,15,6,9,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,12,4.8,7.2,90,10,0,0,0,NA,NA
+1001,Control,1,1,1,2,2,9,3.6,5.4,90,10,0,0,0,NA,NA
