@@ -4,8 +4,6 @@ import seaborn as sns
 import matplotlib.animation as animation
 from models import FehrSchmidtModel, BayesianFehrSchmidtModel
 
-
-
 def plot_utility_curves(total_pot=20, models=None):
     """Plot utility curves comparing Fehr-Schmidt and Bayesian Fehr-Schmidt models"""
     if models is None:
